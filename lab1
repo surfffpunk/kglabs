@@ -1,0 +1,346 @@
+import java.awt.*
+import java.util.*
+import javax.swing.*
+import javax.swing.event.DocumentEvent
+import javax.swing.event.DocumentListener
+import kotlin.math.abs
+import kotlin.math.roundToInt
+
+class ColorConverter {
+    // Преобразование RGB в CMYK
+    fun rgbToCmyk(r: Int, g: Int, b: Int): List<Double> {
+        if (listOf(r, g, b).all { it == 0 }) {
+            return listOf(0.0, 0.0, 0.0, 1.0)
+        }
+        val rNorm = r / 255.0
+        val gNorm = g / 255.0
+        val bNorm = b / 255.0
+
+        val k = 1 - maxOf(rNorm, gNorm, bNorm)
+        val c = (1 - rNorm - k) / (1 - k)
+        val m = (1 - gNorm - k) / (1 - k)
+        val y = (1 - bNorm - k) / (1 - k)
+
+        return listOf(c, m, y, k)
+    }
+
+    // Преобразование CMYK в RGB
+    fun cmykToRgb(c: Double, m: Double, y: Double, k: Double): List<Int> {
+        val r = (255 * (1 - c) * (1 - k)).roundToInt()
+        val g = (255 * (1 - m) * (1 - k)).roundToInt()
+        val b = (255 * (1 - y) * (1 - k)).roundToInt()
+
+        return listOf(r, g, b)
+    }
+
+    // Преобразование RGB в HLS
+    fun rgbToHls(r: Int, g: Int, b: Int): List<Double> {
+        val rNorm = r / 255.0
+        val gNorm = g / 255.0
+        val bNorm = b / 255.0
+
+        val max = maxOf(rNorm, gNorm, bNorm)
+        val min = minOf(rNorm, gNorm, bNorm)
+        if (max == min) {
+            return listOf(0.0, 0.0, max)
+        }
+        val delta = max - min
+
+        val l = (max + min) / 2
+        val s = delta / (1 - abs(2 * l - 1))
+        var h = when (max) {
+            rNorm -> (gNorm - bNorm) / delta
+            gNorm -> ((bNorm - rNorm) / delta) + 2
+            else -> ((rNorm - gNorm) / delta) + 4
+        }
+        h = 60 * ((h + 6) % 6)
+
+        return listOf(h, l, s)
+    }
+
+    // Преобразование HLS в RGB
+    fun hlsToRgb(h: Double, l: Double, s: Double): List<Int> {
+        val c = (1 - abs(2 * l - 1)) * s
+        val x = c * (1 - abs((h / 60) % 2 - 1))
+        val m = l - c / 2
+
+        val (r1, g1, b1) = when {
+            h < 60 -> listOf(c, x, 0.0)
+            h < 120 -> listOf(x, c, 0.0)
+            h < 180 -> listOf(0.0, c, x)
+            h < 240 -> listOf(0.0, x, c)
+            h < 300 -> listOf(x, 0.0, c)
+            else -> listOf(c, 0.0, x)
+        }
+
+        val r = ((r1 + m) * 255).roundToInt()
+        val g = ((g1 + m) * 255).roundToInt()
+        val b = ((b1 + m) * 255).roundToInt()
+
+        return listOf(r, g, b)
+    }
+}
+
+enum class ColorModel {
+    RGB,
+    CMYK,
+    HLS
+}
+
+// Основной GUI
+class ColorConverterApp : JFrame("Конвертер цветов") {
+    private val colorConverter = ColorConverter()
+    private var isUpdating = false
+
+    private var rgbValues = listOf(0, 0, 0)
+    private var cmykValues = listOf(0.0, 0.0, 0.0, 1.0)
+    private var hlsValues = listOf(0.0, 0.0, 0.0)
+
+    private val rgbFields = rgbValues.map { JTextField(5) }
+    private val cmykFields = cmykValues.map { JTextField(5) }
+    private val hlsFields = hlsValues.map { JTextField(5) }
+
+    private val rgbSliders = List(3) { createSlider(0, 255) }
+    private val cmykSliders = List(4) { createSlider(0, 100) }
+    private val hlsSliders = listOf(createSlider(0, 360), createSlider(0, 100), createSlider(0, 100))
+
+    private val colorDisplayPanel = JPanel().apply {
+        preferredSize = Dimension(400, 300) 
+        background = Color.BLACK
+    }
+
+    init {
+        defaultCloseOperation = EXIT_ON_CLOSE
+        layout = GridBagLayout()
+        val gbc = GridBagConstraints().apply {
+            insets = Insets(10, 10, 10, 10) // Отступы
+            fill = GridBagConstraints.HORIZONTAL
+        }
+
+        // RGB панель
+        val rgbPanel = createColorPanel("RGB:", rgbFields, rgbSliders)
+        gbc.gridx = 0
+        gbc.gridy = 0
+        add(rgbPanel, gbc)
+
+        // CMYK панель
+        val cmykPanel = createColorPanel("CMYK:", cmykFields, cmykSliders)
+        gbc.gridx = 0
+        gbc.gridy = 1
+        add(cmykPanel, gbc)
+
+        // HLS панель
+        val hlsPanel = createColorPanel("HLS:", hlsFields, hlsSliders)
+        gbc.gridx = 0
+        gbc.gridy = 2
+        add(hlsPanel, gbc)
+
+        // Панель отображения цвета
+        gbc.gridx = 0
+        gbc.gridy = 3
+        add(colorDisplayPanel, gbc)
+
+        // Кнопка выбора цвета
+        val colorChooserButton = JButton("Выбрать цвет").apply {
+            addActionListener { chooseColor() }
+        }
+        gbc.gridx = 0
+        gbc.gridy = 4
+        add(colorChooserButton, gbc)
+
+        // Добавление слушателей
+        rgbFields.forEach { addDocumentListener(it, ColorModel.RGB) }
+        cmykFields.forEach { addDocumentListener(it, ColorModel.CMYK) }
+        hlsFields.forEach { addDocumentListener(it, ColorModel.HLS) }
+
+        rgbSliders.forEachIndexed { i, slider -> addSliderListener(slider, rgbFields[i], ColorModel.RGB) }
+        cmykSliders.forEachIndexed { i, slider -> addSliderListener(slider, cmykFields[i], ColorModel.CMYK) }
+        hlsSliders.forEachIndexed { i, slider -> addSliderListener(slider, hlsFields[i], ColorModel.HLS) }
+
+        updateFields()
+        updateSliders()
+        updateColorDisplay()
+
+        pack() 
+        setLocationRelativeTo(null) 
+        isVisible = true
+    }
+
+    private fun createColorPanel(title: String, fields: List<JTextField>, sliders: List<JSlider>): JPanel {
+        val panel = JPanel().apply {
+            layout = GridBagLayout()
+            border = BorderFactory.createTitledBorder(title)
+            val gbc = GridBagConstraints().apply {
+                insets = Insets(5, 5, 5, 5) 
+                fill = GridBagConstraints.HORIZONTAL
+            }
+
+            // Добавление текстовых полей
+            fields.forEachIndexed { i, field ->
+                gbc.gridx = i
+                add(field, gbc)
+            }
+
+            // Добавление слайдеров
+            sliders.forEachIndexed { i, slider ->
+                gbc.gridx = i
+                gbc.gridy = 1
+                add(slider, gbc)
+            }
+        }
+        return panel
+    }
+    // Открытие цветовой палитры
+    private fun chooseColor() {
+        val color = JColorChooser.showDialog(this, "Выбор цвета", null)
+        if (color != null) {
+            rgbValues = listOf(color.red, color.green, color.blue)
+            updateFromRgb()
+            updateFields()
+            updateSliders()
+            updateColorDisplay()
+        }
+    }
+
+    // Добавление слушателя изменения текста
+    private fun addDocumentListener(field: JTextField, model: ColorModel) {
+        field.document.addDocumentListener(object : DocumentListener {
+            override fun insertUpdate(e: DocumentEvent?) = updateColors(model)
+            override fun removeUpdate(e: DocumentEvent?) = updateColors(model)
+            override fun changedUpdate(e: DocumentEvent?) = updateColors(model)
+        })
+    }
+
+    // Добавление слушателя изменения значения слайдера
+    private fun addSliderListener(slider: JSlider, field: JTextField, model: ColorModel) {
+        slider.addChangeListener {
+            if (!isUpdating) {
+                field.text = slider.value.toString()
+            }
+        }
+    }
+
+    // Создание слайдера
+    private fun createSlider(min: Int, max: Int): JSlider {
+        return JSlider(min, max).apply {
+            majorTickSpacing = (max - min) / 5
+            paintTicks = true
+            paintLabels = true
+        }
+    }
+
+    // Обновление цветовых значений при изменении модели
+    private fun updateColors(model: ColorModel) {
+        if (isUpdating) return
+        SwingUtilities.invokeLater {
+            isUpdating = true
+            try {
+                when (model) {
+                    ColorModel.RGB -> {
+                        if (rgbFields.any { it.text.isEmpty() }) return@invokeLater
+                        val (r, g, b) = rgbFields.map { it.text.toInt() }
+                        rgbValues = listOf(r, g, b)
+                        updateFromRgb()
+                        updateCMYKFields()
+                        updateHLSFields()
+                    }
+
+                    ColorModel.CMYK -> {
+                        if (cmykFields.any { it.text.isEmpty() }) return@invokeLater
+                        val (c, m, y, k) = cmykFields.map { it.text.toDouble() / 100 }
+                        val (r, g, b) = colorConverter.cmykToRgb(c, m, y, k)
+                        rgbValues = listOf(r, g, b)
+                        cmykValues = listOf(c, m, y, k)
+                        hlsValues = colorConverter.rgbToHls(r, g, b)
+                        updateRGBFields()
+                        updateHLSFields()
+                    }
+
+                    ColorModel.HLS -> {
+                        if (hlsFields.any { it.text.isEmpty() }) return@invokeLater
+                        var (h, l, s) = hlsFields.map { it.text.toDouble() }
+                        l /= 100
+                        s /= 100
+                        val (r, g, b) = colorConverter.hlsToRgb(h, l, s)
+                        rgbValues = listOf(r, g, b)
+                        cmykValues = colorConverter.rgbToCmyk(r, g, b)
+                        hlsValues = listOf(h, l, s)
+                        updateRGBFields()
+                        updateCMYKFields()
+                    }
+                }
+                updateSliders()
+                updateColorDisplay()
+            } catch (e: NumberFormatException) {
+                println(e.toString())
+            } finally {
+                isUpdating = false
+            }
+        }
+    }
+
+    // Обновление полей RGB
+    private fun updateRGBFields() {
+        updateFields(rgbFields, rgbValues)
+    }
+
+    // Обновление полей CMYK
+    private fun updateCMYKFields() {
+        updateFields(cmykFields, cmykValues.map { it * 100 })
+    }
+
+    // Обновление полей HLS
+    private fun updateHLSFields() {
+        val (h, l, s) = hlsValues
+        updateFields(hlsFields, listOf(h, l * 100, s * 100))
+    }
+
+    // Обновление всех полей
+    private fun updateFields() {
+        updateRGBFields()
+        updateCMYKFields()
+        updateHLSFields()
+    }
+
+    // Обновление значения полей
+    private fun updateFields(fields: List<JTextField>, values: List<Number>) {
+        fields.forEachIndexed { i, field ->
+            field.text = String.format(if (values[i] is Double) "%.2f" else "%d", values[i])
+        }
+    }
+
+    // Обновление цветового дисплея
+    private fun updateColorDisplay() {
+        val (r, g, b) = rgbValues
+        colorDisplayPanel.background = Color(r, g, b)
+        colorDisplayPanel.repaint()
+    }
+
+    // Обновление значений слайдеров
+    private fun updateSliders() {
+        val (h, l, s) = hlsValues
+        mapOf(
+            rgbSliders to rgbValues,
+            cmykSliders to cmykValues.map { it * 100 },
+            hlsSliders to listOf(h, l * 100, s * 100)
+        ).forEach { (sliders, values) ->
+            sliders.forEachIndexed { i, slider ->
+                slider.value = values[i].toInt()
+            }
+        }
+    }
+
+    // Обновление данных при изменении RGB значений
+    private fun updateFromRgb() {
+        val (r, g, b) = rgbValues
+        cmykValues = colorConverter.rgbToCmyk(r, g, b)
+        hlsValues = colorConverter.rgbToHls(r, g, b)
+    }
+}
+
+fun main() {
+    Locale.setDefault(Locale.ENGLISH)
+    SwingUtilities.invokeLater {
+        ColorConverterApp()
+    }
+}
